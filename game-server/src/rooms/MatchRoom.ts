@@ -7,10 +7,13 @@ import { Rules } from "./logic/Rules";
 export class MatchRoom extends Room<GameState> {
     maxClients = 7;
 
+    // Store hands as plain arrays OUTSIDE the Schema (avoids Schema v2 encoding issues)
+    private playerHands: Map<string, { suit: string; rank: string }[]> = new Map();
+
     static activeRooms: Map<string, { roomId: string; code: string; clients: number; maxClients: number }> = new Map();
 
     static generateRoomId(): string {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars (I, O, 0, 1)
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
         let id = '';
         for (let i = 0; i < 4; i++) {
             id += chars[Math.floor(Math.random() * chars.length)];
@@ -18,18 +21,53 @@ export class MatchRoom extends Room<GameState> {
         return id;
     }
 
+    broadcastState() {
+        const players: any[] = [];
+        this.state.players.forEach((p, key) => {
+            const hand = this.playerHands.get(key) || [];
+            players.push({
+                id: p.id,
+                sessionId: key,
+                username: p.username,
+                connected: p.connected,
+                role: p.role,
+                handCount: hand.length,
+            });
+        });
+
+        // Current trick from plain array
+        const shared = {
+            phase: this.state.phase,
+            code: this.state.code,
+            currentTurnPlayerId: this.state.currentTurnPlayerId,
+            currentTrick: this.plainTrick,
+            players,
+            finishedPlayers: [...this.plainFinished],
+        };
+
+        this.broadcast("state_update", shared);
+
+        // Send each player their own hand privately
+        this.clients.forEach(client => {
+            const hand = this.playerHands.get(client.sessionId) || [];
+            client.send("my_hand", hand);
+        });
+    }
+
+    // Plain data storage (bypass Schema entirely for game data)
+    private plainTrick: { suit: string; rank: string }[] = [];
+    private plainFinished: string[] = [];
+    private lastTrickWinnerId: string = "";
+    private consecutivePasses: number = 0;
+
     onCreate(options: any) {
         this.setState(new GameState());
         const code = options.code || MatchRoom.generateRoomId();
         this.state.code = code;
+        this.state.phase = GamePhase.LOBBY;
         this.setMetadata({ code });
-
-        // Explicitly unlock so joinById always works.
-        // In Colyseus 0.15, rooms created via client.create() can end up locked
-        // (matchmaker protection), which blocks joinById for other players.
         this.unlock();
 
-        // Register in in-memory registry
         MatchRoom.activeRooms.set(this.roomId, {
             roomId: this.roomId,
             code,
@@ -40,96 +78,110 @@ export class MatchRoom extends Room<GameState> {
 
         if (options.maxPlayers) {
             this.maxClients = options.maxPlayers;
-            this.state.maxPlayers = options.maxPlayers;
         }
 
-        this.onMessage("start_game", (client, message) => {
-            if (this.state.players.get(client.sessionId)?.id !== this.state.players.keys().next().value) {
-                return; // Only host can start
-            }
-            if (this.state.players.size < this.state.minPlayers) {
-                client.send("error", { message: "Not enough players" });
+        // ─── start_game ──────────────────────────────────────────────────
+        this.onMessage("start_game", (client) => {
+            const firstKey = this.state.players.keys().next().value;
+            if (client.sessionId !== firstKey) return;
+
+            const playerCount = this.state.players.size;
+            if (playerCount < 3) {
+                client.send("error", { message: "Not enough players (min 3)" });
                 return;
             }
-            this.state.phase = GamePhase.DEAL;
-            this.broadcast("game_started");
 
             // Deal cards
             const deck = new Deck();
             deck.shuffle();
-            const hands = deck.deal(this.state.players.size);
+            const playerIds = Array.from(this.state.players.keys());
+            const hands = deck.deal(playerIds.length);
 
-            let i = 0;
-            this.state.players.forEach((player) => {
-                player.hand = new ArraySchema<Card>(...hands[i]);
-                player.handCount = player.hand.length;
-                i++;
+            playerIds.forEach((sessionId, i) => {
+                // Store hand as plain objects
+                const plainHand = hands[i].map(c => ({ suit: c.suit, rank: c.rank }));
+                this.playerHands.set(sessionId, plainHand);
+                console.log(`[deal] ${this.state.players.get(sessionId)!.username}: ${plainHand.length} cards`);
             });
 
-            this.state.phase = GamePhase.PLAY;
-            // TODO: Determine starting player (3 of Clubs)
-
-        });
-
-        this.onMessage("play_card", (client, message: { cards: Card[] }) => {
-            if (this.state.phase !== GamePhase.PLAY) return;
-
-            const player = this.state.players.get(client.sessionId);
-            if (!player || player.id !== this.state.currentTurnPlayerId) return;
-
-            // Validate move
-            // Note: message.cards needs to be mapped to actual Card objects or validated
-            // For simplicity here assuming message.cards contains {suit, rank} objects
-            const playedCards = message.cards.map(c => new Card(c.suit, c.rank));
-
-            // Verify player has these cards
-            // TODO: Implement verification
-
-            if (Rules.isValidMove(playedCards, [...this.state.currentTrick])) {
-                // Remove cards from hand
-                // TODO: Implement removal (filtering out played cards)
-                // For now, just reducing count for visual
-                player.handCount -= playedCards.length;
-
-                // Update trick
-                this.state.currentTrick.clear();
-                this.state.currentTrick.push(...playedCards);
-                this.state.lastTrickWinnerId = player.id;
-                this.state.consecutivePasses = 0;
-
-                // Check if player finished
-                if (player.handCount === 0) {
-                    this.state.finishedPlayers.push(player.id);
-                    // TODO: Assign role based on finish order
+            // Find who has 3♣
+            let starterSessionId = playerIds[0];
+            for (const sessionId of playerIds) {
+                const hand = this.playerHands.get(sessionId)!;
+                if (hand.some(c => c.rank === '3' && c.suit === 'C')) {
+                    starterSessionId = sessionId;
+                    break;
                 }
-
-                // Next turn
-                this.nextTurn();
-            } else {
-                client.send("error", { message: "Invalid move" });
             }
+
+            this.state.currentTurnPlayerId = starterSessionId;
+            this.state.phase = GamePhase.PLAY;
+            this.plainTrick = [];
+            this.plainFinished = [];
+            this.consecutivePasses = 0;
+
+            console.log('[game] Started, first player:', this.state.players.get(starterSessionId)!.username);
+            this.broadcastState();
         });
 
+        // ─── play_card ───────────────────────────────────────────────────
+        this.onMessage("play_card", (client, message: { cards: { suit: string; rank: string }[] }) => {
+            if (this.state.phase !== GamePhase.PLAY) return;
+            if (client.sessionId !== this.state.currentTurnPlayerId) return;
+
+            const hand = this.playerHands.get(client.sessionId);
+            if (!hand) return;
+
+            // Validate all cards exist in hand
+            for (const pc of message.cards) {
+                const found = hand.some(c => c.suit === pc.suit && c.rank === pc.rank);
+                if (!found) {
+                    client.send("error", { message: "Card not in hand" });
+                    return;
+                }
+            }
+
+            // Build Card objects for rule validation
+            const playedCards = message.cards.map(c => new Card(c.suit, c.rank));
+            const trickCards = this.plainTrick.map(c => new Card(c.suit, c.rank));
+
+            if (!Rules.isValidMove(playedCards, trickCards)) {
+                client.send("error", { message: "Invalid move" });
+                return;
+            }
+
+            // Remove played cards from hand
+            for (const pc of message.cards) {
+                const idx = hand.findIndex(c => c.suit === pc.suit && c.rank === pc.rank);
+                if (idx !== -1) hand.splice(idx, 1);
+            }
+
+            // Update trick
+            this.plainTrick = message.cards.map(c => ({ suit: c.suit, rank: c.rank }));
+            this.lastTrickWinnerId = client.sessionId;
+            this.consecutivePasses = 0;
+
+            // Check if player finished
+            if (hand.length === 0) {
+                this.plainFinished.push(client.sessionId);
+            }
+
+            this.nextTurn();
+            this.broadcastState();
+        });
+
+        // ─── pass ────────────────────────────────────────────────────────
         this.onMessage("pass", (client) => {
             if (this.state.phase !== GamePhase.PLAY) return;
-            const player = this.state.players.get(client.sessionId);
-            if (!player || player.id !== this.state.currentTurnPlayerId) return;
-
+            if (client.sessionId !== this.state.currentTurnPlayerId) return;
             this.nextTurn(true);
+            this.broadcastState();
         });
 
-        this.onMessage("exchange_cards", (client, message: { cards: Card[] }) => {
-            if (this.state.phase !== GamePhase.EXCHANGE) return;
-            // TODO: Implement exchange logic (swapping cards between players)
-            // This requires tracking who exchanged with whom
-
-            // For MVP/Prototype, let's just skip to DEAL for now when everyone is ready
-        });
-
+        // ─── chat ────────────────────────────────────────────────────────
         this.onMessage("chat_message", (client, message: { text: string }) => {
             const player = this.state.players.get(client.sessionId);
             if (!player) return;
-
             this.broadcast("chat_message", {
                 sender: player.username,
                 text: message.text,
@@ -139,89 +191,68 @@ export class MatchRoom extends Room<GameState> {
     }
 
     nextTurn(passed: boolean = false) {
-        if (passed) {
-            this.state.consecutivePasses++;
-        }
+        if (passed) this.consecutivePasses++;
 
-        const activePlayers = Array.from(this.state.players.values()).filter(p => !this.state.finishedPlayers.includes(p.id));
+        const playerIds = Array.from(this.state.players.keys())
+            .filter(id => !this.plainFinished.includes(id));
 
-        // Check if trick is over (everyone passed except winner)
-        if (this.state.consecutivePasses >= activePlayers.length - 1 && this.state.currentTrick.length > 0) {
-            // Trick finished, winner starts new trick
-            this.state.currentTrick.clear();
-            this.state.consecutivePasses = 0;
-
-            // Winner starts
-            // If winner finished, next active player starts (simple rule for now)
-            if (this.state.finishedPlayers.includes(this.state.lastTrickWinnerId)) {
-                // Find next active player
-                // This is a simplification, usually it passes to next player
-                this.state.currentTurnPlayerId = activePlayers[0]?.id || "";
+        // Trick finished (everyone passed except last player)
+        if (this.consecutivePasses >= playerIds.length - 1 && this.plainTrick.length > 0) {
+            this.plainTrick = [];
+            this.consecutivePasses = 0;
+            // Winner starts next trick
+            if (this.plainFinished.includes(this.lastTrickWinnerId)) {
+                this.state.currentTurnPlayerId = playerIds[0] || "";
             } else {
-                this.state.currentTurnPlayerId = this.state.lastTrickWinnerId;
+                this.state.currentTurnPlayerId = this.lastTrickWinnerId;
             }
             return;
         }
 
-        // Check if round is over (only 1 player left)
-        if (activePlayers.length <= 1) {
+        // Round over
+        if (playerIds.length <= 1) {
             this.state.phase = GamePhase.RESULTS;
-            // Add last player to finished
-            if (activePlayers.length === 1) {
-                this.state.finishedPlayers.push(activePlayers[0].id);
+            if (playerIds.length === 1) {
+                this.plainFinished.push(playerIds[0]);
             }
-            // Trigger Role Assignment
             this.assignRoles();
             return;
         }
 
-        // Find next player
-        const playerIds = Array.from(this.state.players.keys());
-        let currentIndex = playerIds.findIndex(id => this.state.players.get(id)?.id === this.state.currentTurnPlayerId);
-
-        let nextIndex = (currentIndex + 1) % playerIds.length;
-        let nextPlayer = this.state.players.get(playerIds[nextIndex]);
+        // Next player
+        const allKeys = Array.from(this.state.players.keys());
+        let currentIndex = allKeys.indexOf(this.state.currentTurnPlayerId);
+        let nextIndex = (currentIndex + 1) % allKeys.length;
 
         // Skip finished players
-        while (nextPlayer && this.state.finishedPlayers.includes(nextPlayer.id)) {
-            nextIndex = (nextIndex + 1) % playerIds.length;
-            nextPlayer = this.state.players.get(playerIds[nextIndex]);
+        let attempts = 0;
+        while (this.plainFinished.includes(allKeys[nextIndex]) && attempts < allKeys.length) {
+            nextIndex = (nextIndex + 1) % allKeys.length;
+            attempts++;
         }
 
-        this.state.currentTurnPlayerId = nextPlayer?.id || "";
+        this.state.currentTurnPlayerId = allKeys[nextIndex];
     }
 
     assignRoles() {
         const playerCount = this.state.players.size;
-        const finishedOrder = this.state.finishedPlayers;
-
-        // Assign roles based on finish order
-        // 1st -> PRESIDENT
-        // 2nd -> VICE_PRESIDENT (if enough players)
-        // Last -> TDC
-        // 2nd Last -> VICE_TDC (if enough players)
-
-        finishedOrder.forEach((playerId, index) => {
-            const player = Array.from(this.state.players.values()).find(p => p.id === playerId);
+        this.plainFinished.forEach((sessionId, index) => {
+            const player = this.state.players.get(sessionId);
             if (!player) return;
-
             if (index === 0) player.role = "PRESIDENT";
             else if (index === playerCount - 1) player.role = "TDC";
             else if (index === 1 && playerCount >= 4) player.role = "VICE_PRESIDENT";
             else if (index === playerCount - 2 && playerCount >= 4) player.role = "VICE_TDC";
             else player.role = "NEUTRE";
         });
-
-        this.state.phase = GamePhase.EXCHANGE;
-        // In a real game, we would wait for players to see results, then start exchange
-        // For now, we can just wait for 'ready' or 'exchange_cards' messages
+        this.broadcastState();
     }
 
-    onJoin(client: Client, options: any) {
+    async onJoin(client: Client, options: any) {
         console.log(client.sessionId, "joined!");
         const player = new Player(client.sessionId, options.username || "Anonymous");
         this.state.players.set(client.sessionId, player);
-        // Update client count in registry
+
         const reg = MatchRoom.activeRooms.get(this.roomId);
         if (reg) reg.clients = this.clients.length;
 
@@ -230,25 +261,35 @@ export class MatchRoom extends Room<GameState> {
             text: `${player.username} a rejoint la partie !`,
             timestamp: Date.now()
         });
+
+        this.broadcastState();
     }
 
-    onLeave(client: Client, consented: boolean) {
-        console.log(client.sessionId, "left!");
+    async onLeave(client: Client, consented: boolean) {
+        console.log(client.sessionId, "left!", consented ? "(consented)" : "(disconnected)");
         const player = this.state.players.get(client.sessionId);
-        if (player) {
-            player.connected = false;
+        if (player) player.connected = false;
+        this.broadcastState();
+
+        if (!consented) {
+            try {
+                console.log(`[reconnect] waiting for ${client.sessionId}...`);
+                await this.allowReconnection(client, 120);
+                console.log(`[reconnect] ${client.sessionId} reconnected!`);
+                if (player) player.connected = true;
+                this.broadcastState();
+                return;
+            } catch (e) {
+                console.log(`[reconnect] ${client.sessionId} timed out`);
+            }
         }
 
-        try {
-            if (consented) {
-                throw new Error("consented leave");
-            }
-            // Allow reconnection for 60 seconds
-            // await this.allowReconnection(client, 60);
-            // player.connected = true;
-        } catch (e) {
-            this.state.players.delete(client.sessionId);
-        }
+        // Remove player
+        this.state.players.delete(client.sessionId);
+        this.playerHands.delete(client.sessionId);
+        const reg = MatchRoom.activeRooms.get(this.roomId);
+        if (reg) reg.clients = this.clients.length;
+        this.broadcastState();
     }
 
     onDispose() {
