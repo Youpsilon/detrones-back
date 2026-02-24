@@ -1,0 +1,75 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  username    String   @unique
+  password    String
+  mmr         Int      @default(1000)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  matches     MatchPlayer[]
+  seasonScores SeasonScore[]
+}
+
+model Match {
+  id         String   @id @default(cuid())
+  seed       String
+  ruleset    Json
+  startedAt  DateTime @default(now())
+  endedAt    DateTime?
+  durationMs Int?
+  players    MatchPlayer[]
+}
+
+model MatchPlayer {
+  id        String  @id @default(cuid())
+  matchId   String
+  userId    String
+  rank      Int?
+  role      Role?
+  mmrDelta  Int?
+  stats     Json?
+  Match     Match   @relation(fields: [matchId], references: [id])
+  User      User    @relation(fields: [userId], references: [id])
+
+  @@index([matchId])
+  @@index([userId])
+}
+
+enum Role {
+  PRESIDENT
+  VICE_PRESIDENT
+  NEUTRE
+  VICE_TDC
+  TDC
+}
+
+model Season {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  startAt   DateTime
+  endAt     DateTime
+  scores    SeasonScore[]
+}
+
+model SeasonScore {
+  id        String  @id @default(cuid())
+  seasonId  String
+  userId    String
+  score     Int     @default(0)
+  Season    Season  @relation(fields: [seasonId], references: [id])
+  User      User    @relation(fields: [userId], references: [id])
+
+  @@unique([seasonId, userId])
+}

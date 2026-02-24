@@ -1,0 +1,27 @@
+{
+    "name": "@president/back",
+    "private": true,
+    "scripts": {
+        "build": "nuxt build",
+        "dev": "nuxt dev",
+        "generate": "nuxt generate",
+        "preview": "nuxt preview",
+        "postinstall": "nuxt prepare"
+    },
+    "dependencies": {
+        "@president/shared": "workspace:*",
+        "@prisma/client": "^5.0.0",
+        "argon2": "^0.31.0",
+        "jsonwebtoken": "^9.0.0",
+        "nuxt": "^3.10.0",
+        "vue": "^3.4.0",
+        "vue-router": "^4.3.0",
+        "zod": "^3.0.0"
+    },
+    "devDependencies": {
+        "@president/config": "workspace:*",
+        "@types/jsonwebtoken": "^9.0.10",
+        "@types/node": "^20.19.25",
+        "prisma": "^5.0.0"
+    }
+}
