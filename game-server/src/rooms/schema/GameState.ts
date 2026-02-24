@@ -3,8 +3,8 @@ import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
 export enum GamePhase {
     LOBBY = "LOBBY",
     DEAL = "DEAL",
-    PLAY = "PLAY",
     EXCHANGE = "EXCHANGE",
+    PLAY = "PLAY",
     RESULTS = "RESULTS"
 }
 
@@ -24,7 +24,7 @@ export class Player extends Schema {
     @type("string") username: string;
     @type("boolean") connected: boolean = true;
     @type("boolean") isReady: boolean = false;
-    @type("string") role: string = "NEUTRE"; // PRESIDENT, VICE_PRESIDENT, etc.
+    @type("string") role: string = "NEUTRE"; // PRESIDENT, VICE_PRESIDENT, NEUTRE, VICE_TDC, TDC
     @type("number") handCount: number = 0;
     @type([Card]) hand = new ArraySchema<Card>();
 
@@ -47,5 +47,15 @@ export class GameState extends Schema {
 
     // Configuration
     @type("number") minPlayers: number = 3;
-    @type("number") maxPlayers: number = 5;
+    @type("number") maxPlayers: number = 7;
+
+    // Multi-manche
+    @type("number") roundNumber: number = 0;
+
+    // Type du pli courant (single, pair, triple, quad, sequence)
+    @type("string") currentTrickType: string = "";
+
+    // Track identical cards played to force next player / close trick
+    @type("number") activeConsecutiveCards: number = 0;
+    @type("string") isForcedRank: string = "";
 }

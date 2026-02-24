@@ -5,15 +5,14 @@
         "build": "nuxt build",
         "dev": "nuxt dev",
         "generate": "nuxt generate",
-        "preview": "nuxt preview",
-        "postinstall": "nuxt prepare"
+        "preview": "nuxt preview"
     },
     "dependencies": {
         "@president/shared": "workspace:*",
         "@prisma/client": "^5.0.0",
         "argon2": "^0.31.0",
         "jsonwebtoken": "^9.0.0",
-        "nuxt": "^3.10.0",
+        "nuxt": "^3.21.1",
         "vue": "^3.4.0",
         "vue-router": "^4.3.0",
         "zod": "^3.0.0"

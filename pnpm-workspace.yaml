@@ -1,0 +1,4 @@
+packages:
+  - 'back'
+  - 'game-server'
+  - 'packages/*'

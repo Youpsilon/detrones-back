@@ -1,0 +1,16 @@
+{
+  "name": "president-online-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "turbo": "^1.10.0"
+  },
+  "packageManager": "pnpm@8.0.0"
+}
