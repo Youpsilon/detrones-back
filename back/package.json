@@ -9,7 +9,7 @@
     },
     "dependencies": {
         "@president/shared": "workspace:*",
-        "@prisma/client": "^5.0.0",
+        "@prisma/client": "^5.22.0",
         "argon2": "^0.31.0",
         "jsonwebtoken": "^9.0.0",
         "nuxt": "^3.21.1",
@@ -21,6 +21,6 @@
         "@president/config": "workspace:*",
         "@types/jsonwebtoken": "^9.0.10",
         "@types/node": "^20.19.25",
-        "prisma": "^5.0.0"
+        "prisma": "^5.22.0"
     }
 }

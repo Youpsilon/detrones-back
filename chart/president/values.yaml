@@ -1,0 +1,24 @@
+# Default values for president stack
+
+postgres:
+  image: postgres:16-alpine
+  user: user
+  password: password
+  database: president
+  persistence:
+    size: 1Gi
+
+redis:
+  image: redis:7-alpine
+  persistence:
+    size: 1Gi
+
+back:
+  image: my-registry/president-back:latest
+  replicas: 2
+  nodeEnv: production
+
+gameServer:
+  image: my-registry/president-game-server:latest
+  replicas: 2
+  nodeEnv: production

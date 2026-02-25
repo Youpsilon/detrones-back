@@ -23,7 +23,6 @@ const httpServer = http.createServer(app);
 const gameServer = new Server({
     transport: new WebSocketTransport({
         server: httpServer,
-        express: app,   // ← Colyseus uses OUR Express app (with cors already registered)
     }),
 });
 

@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "president.fullname" . }}-back
+  labels:
+    app: {{ include "president.name" . }}-back
+spec:
+  replicas: {{ .Values.back.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "president.name" . }}-back
+  template:
+    metadata:
+      labels:
+        app: {{ include "president.name" . }}-back
+    spec:
+      containers:
+        - name: back
+          image: {{ .Values.back.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.back.nodeEnv }}
+            - name: DATABASE_URL
+              value: "postgresql://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@{{ include "president.fullname" . }}-postgres:5432/{{ .Values.postgres.database }}?schema=public"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "president.fullname" . }}-back
+  labels:
+    app: {{ include "president.name" . }}-back
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
+      targetPort: 3000
+  selector:
+    app: {{ include "president.name" . }}-back
