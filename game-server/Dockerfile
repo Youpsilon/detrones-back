@@ -3,6 +3,7 @@ FROM node:20-alpine AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
+RUN apk add --no-cache openssl libc6-compat python3 alpine-sdk g++ make
 
 FROM base AS build
 WORKDIR /app
