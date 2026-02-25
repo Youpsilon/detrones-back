@@ -5,17 +5,27 @@ services:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: president
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
+
+  # Conteneur éphémère d'initialisation (Se lance, pousse le schéma, et s'arrête)
+  # Ce service permet de faire "npx prisma db push" depuis l'intérieur du réseau Docker,
+  # évitant ainsi d'avoir à exposer les ports de Postgres ou à installer Node localement.
+  prisma-setup:
+    image: node:20-alpine
+    working_dir: /app/back
+    volumes:
+      - .:/app
+    environment:
+      DATABASE_URL: "postgresql://user:password@postgres:5432/president?schema=public"
+    command: /bin/sh -c "apk add --no-cache openssl && npx prisma@5.22.0 db push"
+    depends_on:
+      - postgres
 
   back:
     build:
