@@ -2,9 +2,8 @@
 
 postgres:
   image: postgres:16-alpine
-  user: user
-  password: password
-  database: president
+  # Au lieu de mettre les identifiants en clair, on pointe vers notre secret
+  existingSecret: "db-secret"
   persistence:
     size: 1Gi
 

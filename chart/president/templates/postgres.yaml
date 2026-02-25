@@ -32,13 +32,9 @@ spec:
           image: {{ .Values.postgres.image }}
           ports:
             - containerPort: 5432
-          env:
-            - name: POSTGRES_USER
-              value: {{ .Values.postgres.user }}
-            - name: POSTGRES_PASSWORD
-              value: {{ .Values.postgres.password }}
-            - name: POSTGRES_DB
-              value: {{ .Values.postgres.database }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.postgres.existingSecret }}
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
