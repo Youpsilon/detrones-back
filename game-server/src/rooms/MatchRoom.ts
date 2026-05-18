@@ -100,6 +100,8 @@ export class MatchRoom extends Room<GameState> {
             currentTurnPlayerId: this.state.currentTurnPlayerId,
             currentTrick: this.plainTrick,
             currentTrickType: this.state.currentTrickType,
+            isForcedRank: this.state.isForcedRank,
+            activeConsecutiveCards: this.state.activeConsecutiveCards,
             players,
             finishedPlayers: [...this.plainFinished, ...this.losers.slice().reverse()],
             roundNumber: this.state.roundNumber,
@@ -201,26 +203,15 @@ export class MatchRoom extends Room<GameState> {
 
             // ── Special 2: burns the trick ──
             if (this.config.enableSpecialTwo && playedCards.every(c => c.rank === "2")) {
-                this.plainTrick = [];
-                this.state.currentTrickType = "";
-                this.state.activeConsecutiveCards = 0;
-                this.state.isForcedRank = "";
-                this.consecutivePasses = 0;
+                this.plainTrick = message.cards.map(c => ({ suit: c.suit, rank: c.rank }));
+                this.state.currentTrickType = comboType;
+                this.state.activeConsecutiveCards = message.cards.length;
                 this.lastTrickWinnerId = client.sessionId;
-
-                // Check if player finished
-                this.checkPlayerFinished(client.sessionId, hand, message.cards);
-
-                // Same player leads again (if still in game)
-                this.setCurrentPlayer(client.sessionId);
                 this.broadcastState();
-                return;
-            }
 
-            // ── Quad ──
-            if (comboType === "quad" && this.config.enableRevolution) {
-                if (this.config.revolutionResetsTrick) {
-                    // Quad resets the trick → player leads again
+                this.state.currentTurnPlayerId = ""; // lock turn
+
+                setTimeout(() => {
                     this.plainTrick = [];
                     this.state.currentTrickType = "";
                     this.state.activeConsecutiveCards = 0;
@@ -228,13 +219,44 @@ export class MatchRoom extends Room<GameState> {
                     this.consecutivePasses = 0;
                     this.lastTrickWinnerId = client.sessionId;
 
+                    // Check if player finished
                     this.checkPlayerFinished(client.sessionId, hand, message.cards);
 
+                    // Same player leads again (if still in game)
                     this.setCurrentPlayer(client.sessionId);
-
-                    // Re-sort everyone's hands with new order
-                    this.resortAllHands();
                     this.broadcastState();
+                }, 1500);
+                return;
+            }
+
+            // ── Quad ──
+            if (comboType === "quad" && this.config.enableRevolution) {
+                if (this.config.revolutionResetsTrick) {
+                    this.plainTrick = message.cards.map(c => ({ suit: c.suit, rank: c.rank }));
+                    this.state.currentTrickType = comboType;
+                    this.state.activeConsecutiveCards = 4;
+                    this.lastTrickWinnerId = client.sessionId;
+                    this.broadcastState();
+
+                    this.state.currentTurnPlayerId = ""; // lock turn
+
+                    setTimeout(() => {
+                        // Quad resets the trick → player leads again
+                        this.plainTrick = [];
+                        this.state.currentTrickType = "";
+                        this.state.activeConsecutiveCards = 0;
+                        this.state.isForcedRank = "";
+                        this.consecutivePasses = 0;
+                        this.lastTrickWinnerId = client.sessionId;
+
+                        this.checkPlayerFinished(client.sessionId, hand, message.cards);
+
+                        this.setCurrentPlayer(client.sessionId);
+
+                        // Re-sort everyone's hands with new order
+                        this.resortAllHands();
+                        this.broadcastState();
+                    }, 1500);
                     return;
                 }
 
@@ -245,14 +267,9 @@ export class MatchRoom extends Room<GameState> {
             // ── Normal play & Consecutive/Quad Check ──
             // If the trick continues, check if the played rank matches the trick rank
             let newConsecutiveCount = message.cards.length;
-            let skipNextPlayer = false;
 
             if (this.plainTrick.length > 0 && this.plainTrick[0].rank === message.cards[0].rank) {
                 newConsecutiveCount += this.state.activeConsecutiveCards;
-                // Identical play checking (same number of cards and same rank)
-                if (this.plainTrick.length === message.cards.length) {
-                    skipNextPlayer = true;
-                }
             }
 
             this.plainTrick = message.cards.map(c => ({ suit: c.suit, rank: c.rank }));
@@ -279,34 +296,24 @@ export class MatchRoom extends Room<GameState> {
                     timestamp: Date.now(),
                 });
 
-                this.plainTrick = [];
-                this.state.currentTrickType = "";
-                this.state.activeConsecutiveCards = 0;
-                this.state.isForcedRank = "";
-                this.consecutivePasses = 0;
-
-                this.setCurrentPlayer(client.sessionId);
                 this.broadcastState();
+                
+                this.state.currentTurnPlayerId = ""; // lock turn
+
+                setTimeout(() => {
+                    this.plainTrick = [];
+                    this.state.currentTrickType = "";
+                    this.state.activeConsecutiveCards = 0;
+                    this.state.isForcedRank = "";
+                    this.consecutivePasses = 0;
+
+                    this.setCurrentPlayer(client.sessionId);
+                    this.broadcastState();
+                }, 1500);
                 return;
             }
 
             this.nextTurn();
-
-            if (skipNextPlayer) {
-                const skippedPlayerId = this.state.currentTurnPlayerId;
-                const skippedPlayer = this.state.players.get(skippedPlayerId);
-                const playedPlayer = this.state.players.get(client.sessionId);
-
-                this.broadcast("chat_message", {
-                    sender: "🎮 Système",
-                    text: `⏭️ ${playedPlayer?.username || "Un joueur"} a joué la même valeur ! Le tour de ${skippedPlayer?.username || "quelqu'un"} est sauté.`,
-                    timestamp: Date.now(),
-                });
-
-                // Simulate the skipped player passing
-                this.nextTurn(true);
-            }
-
             this.broadcastState();
         });
 

@@ -94,7 +94,10 @@ export class Rules {
 
         // ── 2 spécial : coupe le pli ──
         if (config.enableSpecialTwo && playedCards.every(c => c.rank === "2")) {
-            // Un ou plusieurs 2 peuvent toujours être joués pour couper
+            // Un ou plusieurs 2 peuvent couper, mais ils doivent respecter le nombre de cartes du pli (sauf si vide)
+            if (currentTrick.length > 0 && playedCards.length !== currentTrick.length) {
+                return false;
+            }
             return true;
         }
 
