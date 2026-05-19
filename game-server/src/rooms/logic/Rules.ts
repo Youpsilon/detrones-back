@@ -108,27 +108,30 @@ export class Rules {
 
         const trickType = this.getCombinationType(currentTrick, config);
 
-        // ── Même type de combinaison requis ──
-        if (playedType !== trickType) return false;
-
-        // ── Règle du 3ème joueur forcé ──
-        if (isForcedRank && playedType !== "sequence") {
-            // Le joueur doit absolument jouer ce rang
-            if (playedCards[0].rank !== isForcedRank) {
-                return false;
-            }
-        }
-
-        // ── Complétion de carré ──
-        // Si 3 cartes du même rang ont été jouées à la suite, le joueur peut poser la 4ème
+        // ── Complétion de carré (prioritaire) ──
+        // À tout moment, si un joueur pose N cartes du même rang que le pli
+        // et que le total atteint exactement 4, c'est un carré valide.
+        // Ex: 1 Valet déjà joué → le joueur suivant pose 3 Valets = carré.
         if (
-            currentTrick.length > 0 &&
-            playedType === "single" &&
-            playedCards[0].rank === currentTrick[0].rank &&
-            activeConsecutiveCards === 3
+            playedCards.every(c => c.rank === currentTrick[0].rank) &&
+            activeConsecutiveCards + playedCards.length === 4
         ) {
             return true;
         }
+
+        // ── Règle du joueur forcé ("ou rien") ──
+        if (isForcedRank && playedType !== "sequence") {
+            // Toutes les cartes jouées doivent être du rang forcé
+            if (!playedCards.every(c => c.rank === isForcedRank)) {
+                return false;
+            }
+            // Le nombre total ne doit pas dépasser 4 (carré)
+            const newTotal = activeConsecutiveCards + playedCards.length;
+            if (newTotal > 4) return false;
+            return true;
+        }
+
+        if (playedType !== trickType) return false;
 
         // ── Même nombre de cartes ──
         if (playedCards.length !== currentTrick.length) return false;

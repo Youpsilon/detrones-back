@@ -189,6 +189,10 @@ export class MatchRoom extends Room<GameState> {
             const trickCards = this.plainTrick.map(c => new Card(c.suit, c.rank));
 
             if (!Rules.isValidMove(playedCards, trickCards, this.config, this.state.isForcedRank, this.state.activeConsecutiveCards)) {
+                const fs = require('fs');
+                const logMsg = `[Invalid Move] Player ${client.sessionId} tried to play: ${JSON.stringify(message.cards)} on trick: ${JSON.stringify(trickCards)} activeConsecutive: ${this.state.activeConsecutiveCards} forcedRank: ${this.state.isForcedRank}\n`;
+                fs.appendFileSync('invalid_moves.log', logMsg);
+                console.warn(logMsg);
                 client.send("error", { message: "Invalid move" });
                 return;
             }
@@ -278,8 +282,14 @@ export class MatchRoom extends Room<GameState> {
             this.lastTrickWinnerId = client.sessionId;
             this.consecutivePasses = 0;
 
-            // Update forced rank logic (if 2 identical combos are played consecutively)
-            if (this.state.activeConsecutiveCards >= message.cards.length * 2 && this.state.activeConsecutiveCards < 4) {
+            // Update forced rank logic: "ou rien" triggers when 2+ same-rank plays
+            // accumulate across multiple turns, meaning the current active count
+            // is strictly greater than the cards played in this specific turn alone.
+            if (
+                this.state.activeConsecutiveCards >= 2 &&
+                this.state.activeConsecutiveCards > message.cards.length &&
+                this.state.activeConsecutiveCards < 4
+            ) {
                 this.state.isForcedRank = message.cards[0].rank;
             } else {
                 this.state.isForcedRank = "";
