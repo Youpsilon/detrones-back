@@ -19,8 +19,15 @@ export class Rules {
     /**
      * Retourne la valeur numérique d'un rang.
      */
-    static getCardValue(rank: string): number {
-        return NORMAL_ORDER.indexOf(rank);
+    static getCardValue(rank: string, isRevolution: boolean = false): number {
+        const val = NORMAL_ORDER.indexOf(rank);
+        if (isRevolution) {
+            // During revolution, 2 becomes the weakest card
+            if (rank === "2") return -1;
+            // Reverse 3-A: A(11) becomes 0, 3(0) becomes 11
+            return 11 - val;
+        }
+        return val;
     }
 
     /**
@@ -60,10 +67,10 @@ export class Rules {
     /**
      * Vérifie si les cartes forment une séquence (suite) valide.
      */
-    static isSequence(cards: Card[]): boolean {
+    static isSequence(cards: Card[], isRevolution: boolean = false): boolean {
         if (cards.length < 3) return false;
 
-        const values = cards.map(c => NORMAL_ORDER.indexOf(c.rank)).sort((a, b) => a - b);
+        const values = cards.map(c => this.getCardValue(c.rank, isRevolution)).sort((a, b) => a - b);
 
         // Vérifier que les valeurs sont consécutives
         for (let i = 1; i < values.length; i++) {
@@ -85,7 +92,8 @@ export class Rules {
         currentTrick: Card[],
         config: GameConfig,
         isForcedRank: string = "",
-        activeConsecutiveCards: number = 0
+        activeConsecutiveCards: number = 0,
+        isRevolution: boolean = false
     ): boolean {
         if (playedCards.length === 0) return false;
 
@@ -93,7 +101,7 @@ export class Rules {
         if (playedType === "invalid") return false;
 
         // ── 2 spécial : coupe le pli ──
-        if (config.enableSpecialTwo && playedCards.every(c => c.rank === "2")) {
+        if (playedCards.every(c => c.rank === "2")) {
             // Un ou plusieurs 2 peuvent couper, mais ils doivent respecter le nombre de cartes du pli (sauf si vide)
             if (currentTrick.length > 0 && playedCards.length !== currentTrick.length) {
                 return false;
@@ -139,13 +147,13 @@ export class Rules {
         // ── Valeur supérieure ou égale requise ──
         if (playedType === "sequence") {
             // Pour une séquence, comparer la plus haute carte
-            const playedMax = Math.max(...playedCards.map(c => this.getCardValue(c.rank)));
-            const trickMax = Math.max(...currentTrick.map(c => this.getCardValue(c.rank)));
+            const playedMax = Math.max(...playedCards.map(c => this.getCardValue(c.rank, isRevolution)));
+            const trickMax = Math.max(...currentTrick.map(c => this.getCardValue(c.rank, isRevolution)));
             return playedMax >= trickMax;
         } else {
             // Pour single / pair / triple / quad : comparer le rang
-            const playedValue = this.getCardValue(playedCards[0].rank);
-            const trickValue = this.getCardValue(currentTrick[0].rank);
+            const playedValue = this.getCardValue(playedCards[0].rank, isRevolution);
+            const trickValue = this.getCardValue(currentTrick[0].rank, isRevolution);
             return playedValue >= trickValue;
         }
     }
@@ -154,11 +162,12 @@ export class Rules {
      * Trie une main par valeur croissante, puis par couleur.
      */
     static sortHand(
-        hand: { suit: string; rank: string }[]
+        hand: { suit: string; rank: string }[],
+        isRevolution: boolean = false
     ): { suit: string; rank: string }[] {
         return hand.sort((a, b) => {
-            const valA = this.getCardValue(a.rank);
-            const valB = this.getCardValue(b.rank);
+            const valA = this.getCardValue(a.rank, isRevolution);
+            const valB = this.getCardValue(b.rank, isRevolution);
             if (valA !== valB) return valA - valB;
             return this.getSuitValue(a.suit) - this.getSuitValue(b.suit);
         });
@@ -215,10 +224,11 @@ export class Rules {
         giverHand: { suit: string; rank: string }[],
         receiverHand: { suit: string; rank: string }[],
         count: number,
-        giveBest: boolean
+        giveBest: boolean,
+        isRevolution: boolean = false
     ): void {
         // Trier la main du donneur
-        this.sortHand(giverHand);
+        this.sortHand(giverHand, isRevolution);
 
         // Extraire les cartes à donner
         const cardsToGive: { suit: string; rank: string }[] = [];

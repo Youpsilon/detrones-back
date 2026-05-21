@@ -27,7 +27,7 @@ const gameServer = new Server({
 });
 
 gameServer.define("lobby", LobbyRoom);
-gameServer.define("match", MatchRoom);
+gameServer.define("match", MatchRoom).enableRealtimeListing();
 
 // Custom REST endpoints for room listing
 app.get("/rooms", (req, res) => {

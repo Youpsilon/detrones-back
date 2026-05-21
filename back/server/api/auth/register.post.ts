@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken'
 
 const RegisterSchema = z.object({
     email: z.string().email(),
-    username: z.string().min(3),
+    username: z.string().min(3).max(20),
     password: z.string().min(6),
 })
 
@@ -23,16 +23,32 @@ export default defineEventHandler(async (event) => {
 
     const { email, username, password } = result.data
 
-    const existingUser = await prisma.user.findFirst({
-        where: {
-            OR: [{ email }, { username }],
-        },
-    })
-
-    if (existingUser) {
+    // Check email uniqueness first
+    const existingEmail = await prisma.user.findUnique({ where: { email } })
+    if (existingEmail) {
         throw createError({
             statusCode: 409,
-            statusMessage: 'User already exists',
+            statusMessage: 'Email already in use',
+        })
+    }
+
+    // Check username uniqueness — suggest a #N suffix if taken
+    const existingUsername = await prisma.user.findUnique({ where: { username } })
+    if (existingUsername) {
+        // Find the next available suffix: username#1, username#2, ...
+        let suggestion = username
+        for (let i = 1; i <= 99; i++) {
+            const candidate = `${username}#${i}`
+            const taken = await prisma.user.findUnique({ where: { username: candidate } })
+            if (!taken) {
+                suggestion = candidate
+                break
+            }
+        }
+        throw createError({
+            statusCode: 409,
+            statusMessage: 'Username already taken',
+            data: { suggestion },
         })
     }
 
@@ -46,9 +62,8 @@ export default defineEventHandler(async (event) => {
         },
     })
 
-    // TODO: Move secret to env
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'secret', {
-        expiresIn: '15m',
+        expiresIn: '7d',
     })
 
     const refreshToken = jwt.sign({ userId: user.id }, process.env.JWT_REFRESH_SECRET || 'refresh_secret', {

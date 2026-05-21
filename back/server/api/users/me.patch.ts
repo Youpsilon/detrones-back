@@ -3,7 +3,8 @@ import prisma from '../../utils/prisma'
 import { getUserFromEvent } from '../../utils/auth'
 
 const UpdateUserSchema = z.object({
-    username: z.string().min(3).optional(),
+    username: z.string().min(3).max(20).optional(),
+    avatarUrl: z.string().url().max(500).optional().or(z.literal('')),
 })
 
 export default defineEventHandler(async (event) => {
@@ -19,7 +20,7 @@ export default defineEventHandler(async (event) => {
         })
     }
 
-    const { username } = result.data
+    const { username, avatarUrl } = result.data
 
     if (username) {
         const existing = await prisma.user.findUnique({ where: { username } })
@@ -31,16 +32,19 @@ export default defineEventHandler(async (event) => {
         }
     }
 
+    const updateData: any = {}
+    if (username !== undefined) updateData.username = username
+    if (avatarUrl !== undefined) updateData.avatarUrl = avatarUrl === '' ? null : avatarUrl
+
     const user = await prisma.user.update({
         where: { id: userId },
-        data: {
-            username,
-        },
+        data: updateData,
         select: {
             id: true,
             username: true,
             email: true,
             mmr: true,
+            avatarUrl: true,
         },
     })
 

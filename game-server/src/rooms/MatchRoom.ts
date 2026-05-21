@@ -25,6 +25,10 @@ export class MatchRoom extends Room<GameState> {
     // ── Previous round roles (for exchanges) ────────────────────────
     private previousRoles: Map<string, string> = new Map();
 
+    // ── Exchange phase ───────────────────────────────────────────────
+    private pendingExchanges: Map<string, { targetId: string; count: number; received: { suit: string; rank: string }[] }> = new Map();
+    private exchangeTimer: ReturnType<typeof setTimeout> | null = null;
+
     // ── Registry ────────────────────────────────────────────────────
     static activeRooms: Map<string, { roomId: string; code: string; clients: number; maxClients: number }> = new Map();
 
@@ -38,6 +42,10 @@ export class MatchRoom extends Room<GameState> {
     }
 
     isPlayerFinished(sessionId: string): boolean {
+        const player = this.state.players.get(sessionId);
+        if (player && player.isSpectator) {
+            return true;
+        }
         return this.plainFinished.includes(sessionId) || this.losers.includes(sessionId);
     }
 
@@ -88,6 +96,7 @@ export class MatchRoom extends Room<GameState> {
                 id: p.id,
                 sessionId: key,
                 username: p.username,
+                avatarUrl: p.avatarUrl,
                 connected: p.connected,
                 role: p.role,
                 handCount: hand.length,
@@ -106,6 +115,11 @@ export class MatchRoom extends Room<GameState> {
             finishedPlayers: [...this.plainFinished, ...this.losers.slice().reverse()],
             roundNumber: this.state.roundNumber,
             config: this.config,
+            reversed: this.state.isRevolution,
+            pendingExchanges: Array.from(this.pendingExchanges.entries()).map(([sessionId, ex]) => ({
+                sessionId,
+                count: ex.count,
+            })),
         };
 
         this.broadcast("state_update", shared);
@@ -188,7 +202,7 @@ export class MatchRoom extends Room<GameState> {
             const playedCards = message.cards.map(c => new Card(c.suit, c.rank));
             const trickCards = this.plainTrick.map(c => new Card(c.suit, c.rank));
 
-            if (!Rules.isValidMove(playedCards, trickCards, this.config, this.state.isForcedRank, this.state.activeConsecutiveCards)) {
+            if (!Rules.isValidMove(playedCards, trickCards, this.config, this.state.isForcedRank, this.state.activeConsecutiveCards, this.state.isRevolution)) {
                 const fs = require('fs');
                 const logMsg = `[Invalid Move] Player ${client.sessionId} tried to play: ${JSON.stringify(message.cards)} on trick: ${JSON.stringify(trickCards)} activeConsecutive: ${this.state.activeConsecutiveCards} forcedRank: ${this.state.isForcedRank}\n`;
                 fs.appendFileSync('invalid_moves.log', logMsg);
@@ -203,38 +217,45 @@ export class MatchRoom extends Room<GameState> {
                 if (idx !== -1) hand.splice(idx, 1);
             }
 
+            // Broadcast card played animation to all clients
+            const player = this.state.players.get(client.sessionId);
+            this.broadcast("card_played", {
+                sessionId: client.sessionId,
+                username: player?.username || "?",
+                cards: message.cards,
+                timestamp: Date.now(),
+            });
+
             const comboType = Rules.getCombinationType(playedCards, this.config);
 
             // ── Special 2: burns the trick ──
-            if (this.config.enableSpecialTwo && playedCards.every(c => c.rank === "2")) {
-                this.plainTrick = message.cards.map(c => ({ suit: c.suit, rank: c.rank }));
-                this.state.currentTrickType = comboType;
-                this.state.activeConsecutiveCards = message.cards.length;
+            if (playedCards.every(c => c.rank === "2")) {
+                this.plainTrick = [];
+                this.state.currentTrickType = "";
+                this.state.activeConsecutiveCards = 0;
+                this.state.isForcedRank = "";
+                this.consecutivePasses = 0;
                 this.lastTrickWinnerId = client.sessionId;
+
+                // Check if player finished
+                this.checkPlayerFinished(client.sessionId, hand, message.cards);
+
+                // Same player leads again (if still in game)
+                this.setCurrentPlayer(client.sessionId);
                 this.broadcastState();
-
-                this.state.currentTurnPlayerId = ""; // lock turn
-
-                setTimeout(() => {
-                    this.plainTrick = [];
-                    this.state.currentTrickType = "";
-                    this.state.activeConsecutiveCards = 0;
-                    this.state.isForcedRank = "";
-                    this.consecutivePasses = 0;
-                    this.lastTrickWinnerId = client.sessionId;
-
-                    // Check if player finished
-                    this.checkPlayerFinished(client.sessionId, hand, message.cards);
-
-                    // Same player leads again (if still in game)
-                    this.setCurrentPlayer(client.sessionId);
-                    this.broadcastState();
-                }, 1500);
                 return;
             }
 
             // ── Quad ──
             if (comboType === "quad" && this.config.enableRevolution) {
+                // Toggle Revolution
+                this.state.isRevolution = !this.state.isRevolution;
+                this.broadcast("chat_message", {
+                    sender: "🎮 Système",
+                    text: this.state.isRevolution ? "🌪️ RÉVOLUTION ! Les cartes sont inversées !" : "🌪️ CONTRE-RÉVOLUTION ! Ordre normal rétabli !",
+                    timestamp: Date.now(),
+                });
+
                 if (this.config.revolutionResetsTrick) {
                     this.plainTrick = message.cards.map(c => ({ suit: c.suit, rank: c.rank }));
                     this.state.currentTrickType = comboType;
@@ -336,9 +357,9 @@ export class MatchRoom extends Room<GameState> {
         });
 
         // ─── exchange_select (for manual exchange selection) ─────────
-        this.onMessage("exchange_done", (client) => {
-            // For now, exchanges are automatic. This message is an acknowledgement.
-            // Could be extended to allow manual selection in the future.
+        this.onMessage("exchange_select", (client, message: { cards: { suit: string; rank: string }[] }) => {
+            if (this.state.phase !== GamePhase.EXCHANGE) return;
+            this.handleExchangeSelect(client, message.cards);
         });
 
         // ─── abandon ─────────────────────────────────────────────────
@@ -408,6 +429,11 @@ export class MatchRoom extends Room<GameState> {
             });
         }
 
+        // Make sure all spectators become active players for the new round
+        this.state.players.forEach(p => {
+            p.isSpectator = false;
+        });
+
         // Deal cards
         const deck = new Deck();
         deck.shuffle();
@@ -417,7 +443,7 @@ export class MatchRoom extends Room<GameState> {
         playerIds.forEach((sessionId, i) => {
             const plainHand = hands[i].map(c => ({ suit: c.suit, rank: c.rank }));
             // Sort the hand
-            Rules.sortHand(plainHand);
+            Rules.sortHand(plainHand, this.state.isRevolution);
             this.playerHands.set(sessionId, plainHand);
             console.log(`[deal] ${this.state.players.get(sessionId)!.username}: ${plainHand.length} cards`);
         });
@@ -430,10 +456,16 @@ export class MatchRoom extends Room<GameState> {
         this.state.currentTrickType = "";
         this.state.activeConsecutiveCards = 0;
         this.state.isForcedRank = "";
+        this.state.isRevolution = false;
 
         // Perform exchanges if not first round and config permits
         if (!isFirstRound && this.config.exchangeCards) {
             this.performExchanges(playerIds);
+            // performExchanges will handle the phase transition
+            // (EXCHANGE if manual selection needed, or direct PLAY if no exchanges)
+            if (this.pendingExchanges.size > 0) {
+                return; // Wait for exchange selections
+            }
         }
 
         // Find starting player
@@ -462,25 +494,36 @@ export class MatchRoom extends Room<GameState> {
         const vpId = this.findPlayerByRole("VICE_PRESIDENT");
         const vtdcId = this.findPlayerByRole("VICE_TDC");
 
+        // Step 1: TDC and VTDC auto-give their best cards
+        // Step 2: President and VP must manually choose which cards to give back
+
+        this.pendingExchanges = new Map();
+
         // Président ↔ TDC : 2 cartes
         if (presidentId && tdcId) {
             const presHand = this.playerHands.get(presidentId)!;
             const tdcHand = this.playerHands.get(tdcId)!;
 
-            // TDC gives their 2 best cards to Président
-            Rules.exchangeCards(tdcHand, presHand, 2, true);
-            // Président gives their 2 worst cards to TDC
-            Rules.exchangeCards(presHand, tdcHand, 2, false);
+            // TDC gives their 2 best cards to Président (automatic)
+            Rules.sortHand(tdcHand, this.state.isRevolution);
+            const cardsFromTdc: { suit: string; rank: string }[] = [];
+            for (let i = 0; i < 2 && tdcHand.length > 0; i++) {
+                cardsFromTdc.push(tdcHand.splice(tdcHand.length - 1, 1)[0]);
+            }
+            presHand.push(...cardsFromTdc);
+            Rules.sortHand(presHand, this.state.isRevolution);
+            Rules.sortHand(tdcHand, this.state.isRevolution);
 
-            // Re-sort both hands
-            Rules.sortHand(presHand);
-            Rules.sortHand(tdcHand);
-
-            console.log("[exchange] Président ↔ TDC : 2 cards exchanged");
+            // President must choose 2 cards to give back
+            this.pendingExchanges.set(presidentId, {
+                targetId: tdcId,
+                count: 2,
+                received: cardsFromTdc,
+            });
 
             this.broadcast("chat_message", {
                 sender: "🎮 Système",
-                text: "Le Président et le Trou du Cul échangent 2 cartes.",
+                text: `Le TDC donne ses 2 meilleures cartes au Président. Le Président doit choisir 2 cartes à donner en retour.`,
                 timestamp: Date.now(),
             });
         }
@@ -490,28 +533,157 @@ export class MatchRoom extends Room<GameState> {
             const vpHand = this.playerHands.get(vpId)!;
             const vtdcHand = this.playerHands.get(vtdcId)!;
 
-            // Vice-TDC gives their 1 best card to Vice-Président
-            Rules.exchangeCards(vtdcHand, vpHand, 1, true);
-            // Vice-Président gives their 1 worst card to Vice-TDC
-            Rules.exchangeCards(vpHand, vtdcHand, 1, false);
+            // Vice-TDC gives their 1 best card to Vice-Président (automatic)
+            Rules.sortHand(vtdcHand, this.state.isRevolution);
+            const cardsFromVtdc: { suit: string; rank: string }[] = [];
+            cardsFromVtdc.push(vtdcHand.splice(vtdcHand.length - 1, 1)[0]);
+            vpHand.push(...cardsFromVtdc);
+            Rules.sortHand(vpHand, this.state.isRevolution);
+            Rules.sortHand(vtdcHand, this.state.isRevolution);
 
-            // Re-sort both hands
-            Rules.sortHand(vpHand);
-            Rules.sortHand(vtdcHand);
-
-            console.log("[exchange] Vice-Président ↔ Vice-TDC : 1 card exchanged");
+            // Vice-President must choose 1 card to give back
+            this.pendingExchanges.set(vpId, {
+                targetId: vtdcId,
+                count: 1,
+                received: cardsFromVtdc,
+            });
 
             this.broadcast("chat_message", {
                 sender: "🎮 Système",
-                text: "Le Vice-Président et le Vice-TDC échangent 1 carte.",
+                text: `Le Vice-TDC donne sa meilleure carte au Vice-Président. Le Vice-Président doit choisir 1 carte à donner en retour.`,
                 timestamp: Date.now(),
             });
+        }
+
+        if (this.pendingExchanges.size > 0) {
+            // Enter EXCHANGE phase - wait for President/VP to select cards
+            this.state.phase = GamePhase.EXCHANGE;
+            this.broadcastState();
+
+            // Notify the players who must choose
+            for (const [sessionId, exchange] of this.pendingExchanges.entries()) {
+                const client = this.clients.find(c => c.sessionId === sessionId);
+                if (client) {
+                    client.send("exchange_request", {
+                        count: exchange.count,
+                        received: exchange.received,
+                    });
+                }
+            }
+
+            // Auto-complete after 30 seconds if no response
+            this.exchangeTimer = setTimeout(() => {
+                this.autoCompleteExchanges();
+            }, 30000);
+        } else {
+            // No exchanges needed, reset roles
+            this.state.players.forEach((p) => {
+                p.role = "NEUTRE";
+            });
+        }
+    }
+
+    handleExchangeSelect(client: Client, selectedCards: { suit: string; rank: string }[]) {
+        const exchange = this.pendingExchanges.get(client.sessionId);
+        if (!exchange) {
+            client.send("error", { message: "Pas d'échange en attente." });
+            return;
+        }
+
+        if (selectedCards.length !== exchange.count) {
+            client.send("error", { message: `Vous devez sélectionner exactement ${exchange.count} carte(s).` });
+            return;
+        }
+
+        const hand = this.playerHands.get(client.sessionId)!;
+
+        // Validate all selected cards exist in hand
+        for (const sc of selectedCards) {
+            const found = hand.some(c => c.suit === sc.suit && c.rank === sc.rank);
+            if (!found) {
+                client.send("error", { message: "Carte invalide." });
+                return;
+            }
+        }
+
+        // Remove selected cards from giver's hand and add to receiver
+        const targetHand = this.playerHands.get(exchange.targetId)!;
+        for (const sc of selectedCards) {
+            const idx = hand.findIndex(c => c.suit === sc.suit && c.rank === sc.rank);
+            if (idx !== -1) {
+                targetHand.push(hand.splice(idx, 1)[0]);
+            }
+        }
+
+        Rules.sortHand(hand, this.state.isRevolution);
+        Rules.sortHand(targetHand, this.state.isRevolution);
+
+        const player = this.state.players.get(client.sessionId);
+        this.broadcast("chat_message", {
+            sender: "🎮 Système",
+            text: `${player?.username} a choisi ses cartes à échanger.`,
+            timestamp: Date.now(),
+        });
+
+        this.pendingExchanges.delete(client.sessionId);
+        this.broadcastState();
+
+        // If all exchanges are done, start the play phase
+        if (this.pendingExchanges.size === 0) {
+            this.startPlayAfterExchange();
+        }
+    }
+
+    autoCompleteExchanges() {
+        // Auto-select worst cards for any remaining exchanges
+        for (const [sessionId, exchange] of this.pendingExchanges.entries()) {
+            const hand = this.playerHands.get(sessionId)!;
+            const targetHand = this.playerHands.get(exchange.targetId)!;
+
+            Rules.sortHand(hand, this.state.isRevolution);
+            for (let i = 0; i < exchange.count && hand.length > 0; i++) {
+                targetHand.push(hand.splice(0, 1)[0]);
+            }
+            Rules.sortHand(hand, this.state.isRevolution);
+            Rules.sortHand(targetHand, this.state.isRevolution);
+
+            const player = this.state.players.get(sessionId);
+            this.broadcast("chat_message", {
+                sender: "🎮 Système",
+                text: `⏱️ Temps écoulé ! ${player?.username} donne automatiquement ses pires cartes.`,
+                timestamp: Date.now(),
+            });
+        }
+
+        this.pendingExchanges.clear();
+        this.startPlayAfterExchange();
+    }
+
+    startPlayAfterExchange() {
+        if (this.exchangeTimer) {
+            clearTimeout(this.exchangeTimer);
+            this.exchangeTimer = null;
         }
 
         // Reset roles to NEUTRE for the new round
         this.state.players.forEach((p) => {
             p.role = "NEUTRE";
         });
+
+        // Find starting player
+        const starterSessionId = Rules.findStartingPlayer(
+            this.playerHands,
+            this.config
+        );
+
+        this.state.currentTurnPlayerId = starterSessionId;
+        this.state.phase = GamePhase.PLAY;
+
+        console.log("[game] Exchange complete, play starts, first player:",
+            this.state.players.get(starterSessionId)!.username);
+
+        this.startTurnTimer();
+        this.broadcastState();
     }
 
     findPlayerByRole(role: string): string | null {
@@ -702,6 +874,23 @@ export class MatchRoom extends Room<GameState> {
             timestamp: Date.now(),
         });
 
+        // Notify Nuxt backend to update MMR
+        const playersData = Array.from(this.state.players.values()).map(p => ({
+            username: p.username,
+            role: p.role
+        }));
+
+        const backUrl = process.env.BACK_URL || "http://back:3000";
+        fetch(`${backUrl}/api/match/end`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ players: playersData })
+        }).then(res => {
+            console.log("[MMR] update response:", res.status);
+        }).catch(err => {
+            console.error("[MMR] failed to update:", err);
+        });
+
         this.broadcastState();
     }
 
@@ -711,7 +900,7 @@ export class MatchRoom extends Room<GameState> {
 
     resortAllHands() {
         this.playerHands.forEach((hand, sessionId) => {
-            Rules.sortHand(hand);
+            Rules.sortHand(hand, this.state.isRevolution);
         });
     }
 
@@ -719,9 +908,78 @@ export class MatchRoom extends Room<GameState> {
      *  LIFECYCLE
      * ================================================================ */
 
+    requestJoin(options: any, isNewRoom: boolean) {
+        if (this.state.phase === GamePhase.PLAY) {
+            const username = options.username || "Anonymous";
+            const botUsername = `🤖 ${username}`;
+            for (const [sid, p] of this.state.players.entries()) {
+                if (!p.connected && (p.username === username || p.username === botUsername)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return true;
+    }
+
     async onJoin(client: Client, options: any) {
         console.log(client.sessionId, "joined!");
-        const player = new Player(client.sessionId, options.username || "Anonymous");
+        const username = options.username || "Anonymous";
+
+        let existingSessionId: string | null = null;
+        const botUsername = `🤖 ${username}`;
+        for (const [sid, p] of this.state.players.entries()) {
+            if (!p.connected && (p.username === username || p.username === botUsername)) {
+                existingSessionId = sid;
+                break;
+            }
+        }
+
+        if (existingSessionId && this.state.phase !== GamePhase.LOBBY) {
+            console.log(`[rejoin] ${username} takes over old session ${existingSessionId}`);
+            
+            const oldPlayer = this.state.players.get(existingSessionId)!;
+            const newPlayer = new Player(client.sessionId, username);
+            newPlayer.role = oldPlayer.role;
+            newPlayer.avatarUrl = options.avatarUrl || oldPlayer.avatarUrl || "";
+            
+            this.state.players.delete(existingSessionId);
+            this.state.players.set(client.sessionId, newPlayer);
+            
+            const hand = this.playerHands.get(existingSessionId) || [];
+            this.playerHands.delete(existingSessionId);
+            this.playerHands.set(client.sessionId, hand);
+            
+            if (this.state.currentTurnPlayerId === existingSessionId) {
+                this.state.currentTurnPlayerId = client.sessionId;
+            }
+            if (this.lastTrickWinnerId === existingSessionId) {
+                this.lastTrickWinnerId = client.sessionId;
+            }
+            
+            this.plainFinished = this.plainFinished.map(id => id === existingSessionId ? client.sessionId : id);
+            this.losers = this.losers.map(id => id === existingSessionId ? client.sessionId : id);
+            
+            if (this.previousRoles.has(existingSessionId)) {
+                this.previousRoles.set(client.sessionId, this.previousRoles.get(existingSessionId)!);
+                this.previousRoles.delete(existingSessionId);
+            }
+            
+            this.broadcast("chat_message", {
+                sender: "🎮 Système",
+                text: `${username} est revenu dans la partie !`,
+                timestamp: Date.now(),
+            });
+            
+            this.broadcastState();
+            return;
+        }
+
+        const player = new Player(client.sessionId, username);
+        player.avatarUrl = options.avatarUrl || "";
+        if (this.state.phase !== GamePhase.LOBBY) {
+            player.isSpectator = true;
+        }
         this.state.players.set(client.sessionId, player);
 
         const reg = MatchRoom.activeRooms.get(this.roomId);
@@ -747,7 +1005,13 @@ export class MatchRoom extends Room<GameState> {
                 console.log(`[reconnect] waiting for ${client.sessionId}...`);
                 await this.allowReconnection(client, 120);
                 console.log(`[reconnect] ${client.sessionId} reconnected!`);
-                if (player) player.connected = true;
+                const currentP = this.state.players.get(client.sessionId);
+                if (currentP) {
+                    currentP.connected = true;
+                    if (currentP.username.startsWith("🤖 ")) {
+                        currentP.username = currentP.username.substring(3);
+                    }
+                }
                 this.broadcastState();
                 return;
             } catch (e) {
@@ -755,10 +1019,13 @@ export class MatchRoom extends Room<GameState> {
             }
         }
 
+        const currentP = this.state.players.get(client.sessionId);
+        if (!currentP) return;
+
         // If in game, the disconnected player becomes a bot (auto-pass)
-        if (this.state.phase === GamePhase.PLAY && player) {
-            if (!player.username.startsWith("🤖")) {
-                player.username = `🤖 ${player.username}`;
+        if (this.state.phase === GamePhase.PLAY) {
+            if (!currentP.username.startsWith("🤖")) {
+                currentP.username = `🤖 ${currentP.username}`;
             }
             // If it's their turn, trigger auto-pass
             if (this.state.currentTurnPlayerId === client.sessionId) {

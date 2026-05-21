@@ -15,11 +15,30 @@ model User {
   email       String   @unique
   username    String   @unique
   password    String
-  mmr         Int      @default(1000)
+  mmr         Int      @default(0)
+  avatarUrl   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   matches     MatchPlayer[]
   seasonScores SeasonScore[]
+
+  // Friend relationships
+  friends     Friend[] @relation("UserFriends")
+  friendOf    Friend[] @relation("FriendUsers")
+}
+
+model Friend {
+  id        String   @id @default(cuid())
+  userId    String
+  friendId  String
+  createdAt DateTime @default(now())
+
+  user      User     @relation("UserFriends", fields: [userId], references: [id])
+  friend    User     @relation("FriendUsers", fields: [friendId], references: [id])
+
+  @@unique([userId, friendId])
+  @@index([userId])
+  @@index([friendId])
 }
 
 model Match {
