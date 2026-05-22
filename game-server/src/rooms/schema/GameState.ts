@@ -22,11 +22,13 @@ export class Card extends Schema {
 export class Player extends Schema {
     @type("string") id: string;
     @type("string") username: string;
+    @type("string") avatarUrl: string = "";
     @type("boolean") connected: boolean = true;
     @type("boolean") isReady: boolean = false;
     @type("string") role: string = "NEUTRE"; // PRESIDENT, VICE_PRESIDENT, NEUTRE, VICE_TDC, TDC
     @type("number") handCount: number = 0;
     @type([Card]) hand = new ArraySchema<Card>();
+    @type("boolean") isSpectator: boolean = false;
 
     constructor(id: string, username: string) {
         super();
@@ -58,4 +60,7 @@ export class GameState extends Schema {
     // Track identical cards played to force next player / close trick
     @type("number") activeConsecutiveCards: number = 0;
     @type("string") isForcedRank: string = "";
+    
+    // Status of Revolution
+    @type("boolean") isRevolution: boolean = false;
 }

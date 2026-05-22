@@ -13,7 +13,7 @@ export interface GameConfig {
     enableSequences: boolean;
 
     /** Le 2 peut couper / brûler le pli */
-    enableSpecialTwo: boolean;
+
 
     /** Un carré déclenche une révolution (inverse l'ordre) */
     enableRevolution: boolean;
@@ -45,7 +45,7 @@ export const DEFAULT_CONFIG: GameConfig = {
     minPlayers: 3,
     maxPlayers: 7,
     enableSequences: false,
-    enableSpecialTwo: false,
+
     enableRevolution: true,
     revolutionResetsTrick: true,
     startRule: "three_of_clubs",

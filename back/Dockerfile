@@ -37,14 +37,15 @@ RUN apk add --no-cache openssl
 # Copy the standalone output from Nuxt
 COPY --from=build /app/back/.output ./.output
 
-# Copy Prisma engines and schema if needed by Nitro
-# COPY --from=build /app/back/node_modules/.prisma ./node_modules/.prisma
-# COPY --from=build /app/back/prisma ./prisma
+# Create uploads directory (will be overridden by Docker volume in prod)
+RUN mkdir -p /app/uploads/avatars
 
 EXPOSE 3000
 
 ENV HOST=0.0.0.0
 ENV PORT=3000
 ENV NODE_ENV=production
+
+VOLUME ["/app/uploads"]
 
 CMD ["node", ".output/server/index.mjs"]

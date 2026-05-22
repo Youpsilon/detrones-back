@@ -7,11 +7,15 @@ services:
       POSTGRES_DB: president
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
 
   redis:
     image: redis:7-alpine
     volumes:
       - redis_data:/data
+    ports:
+      - "6379:6379"
 
   # Conteneur éphémère d'initialisation (Se lance, pousse le schéma, et s'arrête)
   # Ce service permet de faire "npx prisma db push" depuis l'intérieur du réseau Docker,
@@ -35,6 +39,8 @@ services:
       - "3000:3000"
     environment:
       DATABASE_URL: "postgresql://user:password@postgres:5432/president?schema=public"
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       - postgres
 
@@ -46,11 +52,13 @@ services:
       - "2567:2567"
     environment:
       REDIS_URL: "redis://redis:6379"
+      BACK_URL: "http://back:3000"
     depends_on:
       - redis
 
 volumes:
   postgres_data:
   redis_data:
+  uploads_data:
 
 
