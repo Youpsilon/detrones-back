@@ -15,6 +15,8 @@ export class MatchRoom extends Room<GameState> {
     private losers: string[] = [];
     private lastTrickWinnerId: string = "";
     private consecutivePasses: number = 0;
+    private createdAt: number = Date.now();
+    private playerAvatars: Map<string, string> = new Map();
 
     // ── Configuration ───────────────────────────────────────────────
     private config: GameConfig = buildConfig();
@@ -26,7 +28,14 @@ export class MatchRoom extends Room<GameState> {
     private previousRoles: Map<string, string> = new Map();
 
     // ── Registry ────────────────────────────────────────────────────
-    static activeRooms: Map<string, { roomId: string; code: string; clients: number; maxClients: number }> = new Map();
+    static activeRooms: Map<string, {
+        roomId: string;
+        code: string;
+        clients: number;
+        maxClients: number;
+        createdAt: number;
+        players: { username: string; avatarUrl: string; isHost: boolean }[];
+    }> = new Map();
 
     static generateRoomId(): string {
         const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -124,7 +133,12 @@ export class MatchRoom extends Room<GameState> {
         const code = options.code || MatchRoom.generateRoomId();
         this.state.code = code;
         this.state.phase = GamePhase.LOBBY;
-        this.setMetadata({ code });
+        this.createdAt = Date.now();
+        this.setMetadata({
+            code,
+            createdAt: this.createdAt,
+            players: []
+        });
         this.unlock();
 
         // Build config from options
@@ -138,6 +152,8 @@ export class MatchRoom extends Room<GameState> {
             code,
             clients: 0,
             maxClients: this.maxClients,
+            createdAt: this.createdAt,
+            players: [],
         });
         console.log("[registry] room created:", this.roomId, "code:", code);
 
@@ -698,6 +714,31 @@ export class MatchRoom extends Room<GameState> {
         });
     }
 
+    updateLobbyMetadata() {
+        const playerList: any[] = [];
+        let index = 0;
+        this.state.players.forEach((p, key) => {
+            playerList.push({
+                username: p.username,
+                avatarUrl: this.playerAvatars.get(key) || "",
+                isHost: index === 0,
+            });
+            index++;
+        });
+
+        this.setMetadata({
+            code: this.state.code,
+            createdAt: this.createdAt,
+            players: playerList
+        });
+
+        const reg = MatchRoom.activeRooms.get(this.roomId);
+        if (reg) {
+            reg.clients = this.clients.length;
+            reg.players = playerList;
+        }
+    }
+
     /* ================================================================
      *  LIFECYCLE
      * ================================================================ */
@@ -706,6 +747,8 @@ export class MatchRoom extends Room<GameState> {
         console.log(client.sessionId, "joined!");
         const player = new Player(client.sessionId, options.username || "Anonymous");
         this.state.players.set(client.sessionId, player);
+
+        this.playerAvatars.set(client.sessionId, options.avatarUrl || "");
 
         const reg = MatchRoom.activeRooms.get(this.roomId);
         if (reg) reg.clients = this.clients.length;
@@ -717,6 +760,7 @@ export class MatchRoom extends Room<GameState> {
         });
 
         this.broadcastState();
+        this.updateLobbyMetadata();
     }
 
     async onLeave(client: Client, consented: boolean) {
@@ -753,9 +797,11 @@ export class MatchRoom extends Room<GameState> {
         // Remove player if in lobby
         this.state.players.delete(client.sessionId);
         this.playerHands.delete(client.sessionId);
+        this.playerAvatars.delete(client.sessionId);
         const reg = MatchRoom.activeRooms.get(this.roomId);
         if (reg) reg.clients = this.clients.length;
         this.broadcastState();
+        this.updateLobbyMetadata();
     }
 
     onDispose() {

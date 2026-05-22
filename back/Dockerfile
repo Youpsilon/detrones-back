@@ -8,11 +8,18 @@ RUN apk add --no-cache openssl
 FROM base AS build
 WORKDIR /app
 
-# Copy workspace
-COPY . .
+# Copy workspace configuration
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+
+# Copy packages package.json files to allow pnpm to resolve structure
+COPY packages/shared/package.json ./packages/shared/
+COPY back/package.json ./back/
 
 # Install dependencies
 RUN pnpm install --frozen-lockfile
+
+# Copy the rest of the code
+COPY . .
 
 # Generate Prisma Client
 WORKDIR /app/back

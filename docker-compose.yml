@@ -23,7 +23,7 @@ services:
       - .:/app
     environment:
       DATABASE_URL: "postgresql://user:password@postgres:5432/president?schema=public"
-    command: /bin/sh -c "apk add --no-cache openssl && npx prisma@5.22.0 db push"
+    command: /bin/sh -c "apk add --no-cache openssl && npx prisma@5.22.0 db push --skip-generate"
     depends_on:
       - postgres
 
