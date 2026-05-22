@@ -1,2 +1,53 @@
-node_modules
+# ─── Dependencies ─────────────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ─── Build outputs ────────────────────────────────────────────────────────────
+dist/
+build/
+out/
+.output/
+*.tsbuildinfo
+
+# ─── Environment & secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
 k8s/db-secret.yaml
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── Runtime / uploads (user-generated content) ───────────────────────────────
+back/uploads/
+
+# ─── OS & system files ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── IDE / Editor ─────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+# (docker-compose.yml is intentionally tracked)
+
+# ─── Prisma ───────────────────────────────────────────────────────────────────
+back/prisma/dev.db
+back/prisma/dev.db-journal
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+.cache/
+.tmp/
